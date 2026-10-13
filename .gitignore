@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.claude/
+.venv/
+.streamlit/secrets.toml
+datacenter_telemetry_dataset.csv
