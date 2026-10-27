@@ -1,0 +1,33 @@
+# Pipeline configuration. Paths are relative to the repository root.
+# Set DCSEC_DATA_SOURCE=synthetic to override data.source (used by CI and tests).
+
+data:
+  source: nsl-kdd            # nsl-kdd | synthetic
+  train_url: https://raw.githubusercontent.com/defcom17/NSL_KDD/master/KDDTrain%2B.txt
+  test_url: https://raw.githubusercontent.com/defcom17/NSL_KDD/master/KDDTest%2B.txt
+  cache_dir: data/raw        # downloaded files are cached here
+  allow_synthetic_fallback: true   # use synthetic telemetry if the download fails
+  synthetic:
+    n_samples: 2000
+    attack_fraction: 0.1
+    seed: 42
+
+models:
+  isolation_forest:
+    n_estimators: 100
+    contamination: from_train   # from_train = share of attacks in the training labels
+    random_state: 42
+    n_jobs: -1
+  random_forest:
+    n_estimators: 200
+    random_state: 42
+    n_jobs: -1
+
+explain:
+  enabled: true
+  sample_size: 500           # test rows explained with SHAP
+  top_k: 3                   # reasons reported per alert
+
+paths:
+  artifacts_dir: artifacts   # trained models, scaler, metadata
+  outputs_dir: outputs       # metrics, plots, SHAP files

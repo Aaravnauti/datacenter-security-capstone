@@ -1,6 +1,12 @@
 __pycache__/
 *.pyc
+.pytest_cache/
+.ruff_cache/
 .claude/
 .venv/
 .streamlit/secrets.toml
+
+# Pipeline products (regenerate with `python -m src.pipeline`)
+data/
+artifacts/
 datacenter_telemetry_dataset.csv
