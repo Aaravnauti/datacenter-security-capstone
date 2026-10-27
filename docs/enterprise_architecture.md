@@ -10,17 +10,20 @@ production security capability for a data center. It covers five pillars:
 4. Regulatory & framework mapping
 5. Enterprise roadmap
 
-**Baseline results the design builds on** (train = KDDTrain+, test = KDDTest+):
+**Results the design builds on** (train = KDDTrain+, test = KDDTest+, malicious class):
 
-| Model | Role | Malicious recall | Malicious precision | Benign recall |
-|---|---|---|---|---|
-| Isolation Forest | Novelty detection (unseen attacks) | 0.95 | 0.79 | 0.67 |
-| Random Forest | Known-signature classification | 0.62 | 0.97 | 0.97 |
+| Model | Role | Default threshold: recall / precision / false alarms | Tuned threshold: recall / precision / false alarms |
+|---|---|---|---|
+| Isolation Forest | Novelty detection, no attack labels needed | 0.95 / 0.79 / 3,174 | 0.62 / 0.98 / 195 |
+| Random Forest | Known-signature classification, class-weighted | 0.62 / 0.97 / 278 | 0.98 / 0.91 / 1,262 |
 
-The two models fail in opposite ways. The Isolation Forest catches unseen attacks but
-raises false alarms. The Random Forest is precise but misses novel attack types. The
-architecture below is built around that finding: the anomaly detector *raises* an alert,
-and later stages *confirm, explain and triage* it.
+Thresholds are tuned on a validation split of the training data, never the test set. The
+numbers show that **the operating threshold, not the model, sets the false-alarm cost**.
+At default thresholds the models fail in opposite ways: the Isolation Forest catches unseen
+attacks but raises many false alarms, and the Random Forest is precise but misses novel
+attacks. Tuning moves each along its own precision-recall curve. The architecture below is
+built around that trade-off: a detector *raises* an alert at a chosen operating point, and
+later stages *confirm, explain and triage* it.
 
 ---
 
@@ -101,8 +104,9 @@ response to a false positive must not itself cause the outage you are trying to 
 ## Pillar 2 — MLOps, False-Positive Reduction & Explainable AI
 
 ### 2.1 Why false positives matter here
-At the measured operating point, the Isolation Forest flags about a third of benign
-traffic (benign recall 0.67). That is unusable as a pager on its own. In a data center,
+At its default threshold the Isolation Forest flags about a third of benign traffic (3,174
+false alarms in 9,711 benign connections), and the tuned Random Forest raises 1,262. Either
+is too noisy to page a person on its own. In a data center,
 alert fatigue leads to ignored alerts, and an automated reaction to a false thermal alarm
 can trigger an unnecessary failover. The goal is to keep the detector's high recall
 while removing noise *downstream* of it.
@@ -112,7 +116,7 @@ while removing noise *downstream* of it.
 | Layer | Technique | Effect |
 |---|---|---|
 | Threshold | Tune the IF decision threshold on a validation set to a target alert budget (e.g. ≤ 5 pages/shift), using a precision–recall curve instead of `contamination=0.1` | Trades a little recall for much better precision |
-| Two-stage scoring | IF raises a candidate. RF + rule checks confirm or downgrade it | Combines IF's recall with RF's 0.97 precision |
+| Two-stage scoring | IF raises a candidate. RF + rule checks confirm or downgrade it | Combines IF's label-free coverage with RF's precision |
 | Physical consistency | Accept a temperature/power anomaly only if an independent sensor disagrees or agrees, depending on the hypothesis | Separates spoofed telemetry from real thermal events |
 | Context suppression | Maintenance windows, change tickets, known batch jobs, deduplication over a time window | Removes expected anomalies |
 | Risk-based alerting | Accumulate a risk score per asset; page only when it crosses a threshold | One page per incident instead of one per event |
@@ -277,14 +281,17 @@ the evidence for that.
 
 ### Enterprise Roadmap
 
-This project demonstrated, in an authorized lab, that a data center's IT/OT boundary can
-be crossed from a vulnerable monitoring application, and that an AI defense layer can
-detect the resulting anomalies. Evaluated against previously unseen attack types
-(NSL-KDD KDDTest+), the unsupervised Isolation Forest detected 95% of malicious traffic,
-while the supervised Random Forest achieved 97% precision but only 62% recall. The
-models are therefore complementary. A production system should use the anomaly detector
-for coverage and the classifier, context enrichment and human review for precision.
-Moving from prototype to production is planned in four phases.
+This project reconstructs how a data center's IT/OT boundary can be crossed from a
+vulnerable monitoring application, and builds and evaluates an AI defense layer for the
+resulting behaviour. Evaluated against previously unseen attack types (NSL-KDD KDDTest+),
+a class-weighted Random Forest with a tuned alert threshold detected 98% of malicious
+connections at 91% precision, up from 62% recall at the default threshold. The unsupervised
+Isolation Forest detected 95% of attacks at its default threshold without using any attack
+labels, which makes it the fallback when labeled attack data is unavailable. Because the
+operating threshold sets the false-alarm cost, a production system should choose it from
+facility data and an agreed alert budget, and add context enrichment and human review
+before any automated response. Moving from prototype to production is planned in four
+phases.
 
 **Phase 1 — Foundation (0–3 months).** Segment the network into IT, OT DMZ, facility
 management and controller zones following the Purdue model and IEC 62443 zones and

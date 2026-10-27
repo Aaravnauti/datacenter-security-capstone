@@ -28,6 +28,31 @@ def test_train_saves_loadable_artifacts(cfg):
     loaded = load_artifacts(artifacts_dir)
     assert loaded["metadata"]["feature_names"] == metadata["feature_names"]
     assert loaded["rf"].n_features_in_ == len(metadata["feature_names"])
+    assert len(metadata["benign_mean_scaled"]) == len(metadata["feature_names"])
+
+
+def test_random_forest_uses_class_weights_from_config(cfg):
+    ds = prepare_data(cfg)
+    _, rf = fit_models(ds.X_train, ds.y_train, cfg)
+    assert rf.class_weight == "balanced_subsample"
+
+
+def test_auto_thresholds_are_tuned_and_recorded(cfg):
+    thresholds = train(cfg)["thresholds"]
+
+    assert thresholds["mode"] == "auto"
+    assert 0.0 <= thresholds["random_forest"] <= 1.0
+    for name in ("isolation_forest", "random_forest"):
+        assert thresholds["tuning"][name]["precision"] >= cfg["thresholds"]["min_precision"]
+
+
+def test_manual_thresholds_use_configured_values(cfg):
+    cfg["thresholds"]["mode"] = "manual"
+    cfg["thresholds"]["manual"] = {"isolation_forest": 0.45, "random_forest": 0.4}
+
+    thresholds = train(cfg)["thresholds"]
+
+    assert thresholds == {"mode": "manual", "isolation_forest": 0.45, "random_forest": 0.4}
 
 
 def test_load_artifacts_fails_clearly_before_training(cfg):
@@ -55,14 +80,23 @@ def test_evaluate_reports_metrics_and_writes_outputs(cfg):
     metrics = evaluate(cfg)
     outputs_dir = resolve_path(cfg["paths"]["outputs_dir"])
 
-    for model in ("isolation_forest", "random_forest"):
-        for key in ("precision", "recall", "f1", "accuracy", "roc_auc", "confusion_matrix"):
-            assert key in metrics[model]
+    for strategy in ("isolation_forest", "random_forest", "either_flags", "both_flag"):
+        for key in ("recall", "precision", "f1", "accuracy", "false_alarms", "missed_attacks"):
+            assert key in metrics["strategies"][strategy]
+            assert key in metrics["baseline_default_thresholds"][strategy]
     # The synthetic attacks are well separated, so a working pipeline scores high.
-    assert metrics["random_forest"]["recall"] > 0.9
-    assert metrics["isolation_forest"]["recall"] > 0.9
+    assert metrics["strategies"]["random_forest"]["recall"] > 0.9
+    assert metrics["strategies"]["either_flags"]["recall"] > 0.9
+    assert metrics["roc_auc"]["random_forest"] > 0.95
 
-    for name in ("metrics.json", "classification_report.txt", "results.png"):
+    for name in (
+        "metrics.json",
+        "strategy_comparison.csv",
+        "feature_drivers.csv",
+        "classification_report.txt",
+        "results.png",
+        "confusion_matrices.png",
+    ):
         assert (outputs_dir / name).exists()
     assert json.loads((outputs_dir / "metrics.json").read_text())["n_test"] == metrics["n_test"]
 

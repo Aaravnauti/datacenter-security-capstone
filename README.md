@@ -25,18 +25,43 @@ Trained on the official NSL-KDD training set (`KDDTrain+`) and evaluated on the 
 test set (`KDDTest+`), which contains attack types that never appear in training. Metrics are
 for the malicious class (22,544 test connections: 12,833 malicious, 9,711 benign).
 
-| Model | Role | Precision | Recall | F1 | ROC-AUC |
-|---|---|---|---|---|---|
-| Isolation Forest | Unsupervised, trained on benign traffic only | 0.79 | **0.95** | 0.86 | 0.94 |
-| Random Forest | Supervised signature classifier | **0.97** | 0.62 | 0.76 | 0.96 |
+Alert thresholds are tuned automatically from precision-recall curves on a validation split
+of the **training** data (the test set is never used for tuning). Isolation Forest alerts
+when its anomaly score exceeds 0.532, Random Forest when P(malicious) reaches 0.015.
 
-**The two models fail in opposite ways, which is why the design uses both.**
-The Isolation Forest catches 95% of attacks, including unseen types, but raises 3,174 false
-alarms on benign traffic. The Random Forest raises only 274 false alarms but misses 38% of
-novel attacks. In a data center, false alarms are costly (an automated reaction to a false
-thermal alert can cause an outage), so the recommended design lets the anomaly detector
-raise a candidate and uses the classifier, context and a human to confirm it.
-See [`docs/enterprise_architecture.md`](docs/enterprise_architecture.md).
+| Strategy | Recall | Precision | F1 | Accuracy | False alarms | Missed attacks |
+|---|---|---|---|---|---|---|
+| Isolation Forest alone | 0.62 | 0.98 | 0.76 | 0.78 | 195 | 4,864 |
+| Random Forest alone | **0.98** | 0.91 | **0.94** | **0.93** | 1,262 | **271** |
+| Either flags (OR) | **0.98** | 0.91 | 0.94 | 0.93 | 1,279 | 271 |
+| Both flag (AND) | 0.62 | **0.98** | 0.76 | 0.78 | **178** | 4,864 |
+
+For comparison, the same models at their untuned default thresholds (Isolation Forest at its
+contamination cutoff, Random Forest at 0.50):
+
+| Strategy | Recall | Precision | F1 | False alarms | Missed attacks |
+|---|---|---|---|---|---|
+| Isolation Forest alone | 0.95 | 0.79 | 0.86 | 3,174 | 681 |
+| Random Forest alone | 0.62 | 0.97 | 0.75 | 278 | 4,931 |
+
+**What this shows**
+
+- **Threshold tuning is what fixed the Random Forest's low recall (0.62 to 0.98).** Class
+  weighting (`class_weight: balanced_subsample`) is enabled, but it did not help on its own:
+  NSL-KDD's training set is already about 53% benign and 47% attack, so there is little
+  imbalance to correct. The misses come from novel attack types, which the default 0.50
+  cutoff rejects.
+- **The trade-off is real.** The tuned Random Forest raises 1,262 false alarms against 278
+  before. Raise `thresholds.min_precision` to 0.99 and the "either flags" strategy gives
+  recall 0.86 with 467 false alarms. Pick the point that matches how costly a false alarm is
+  in your facility.
+- **With tuned thresholds the Random Forest dominates here.** "Either flags" adds almost
+  nothing beyond it. The Isolation Forest's value is that it needs no labeled attacks at all,
+  so it is the fallback when labeled attack data is unavailable. At its default threshold it
+  catches 95% of attacks with zero attack labels.
+- **A threshold of 0.015 is aggressive.** It flags anything that even 1.5% of trees consider
+  malicious. It transfers to `KDDTest+` because the novel attacks there resemble training
+  families. It may not transfer to a genuinely new attack family, so re-tune on facility data.
 
 An earlier version split a single file into train and test and reported a perfect 1.00.
 That result was an artifact of the split, so this repository evaluates on the separate
@@ -44,15 +69,19 @@ official test file.
 
 ![Evaluation results](outputs/results.png)
 
+Confusion matrices for all four strategies are in `outputs/confusion_matrices.png`, and the
+traffic features that most distinguish flagged connections are in `outputs/feature_drivers.csv`.
+
 ## Architecture
 
 ```mermaid
 flowchart LR
     A[NSL-KDD<br/>KDDTrain+ / KDDTest+] --> B[data_preprocessing<br/>download, encode, scale]
-    B --> C[train_models<br/>Isolation Forest + Random Forest]
-    C --> D[(artifacts/<br/>joblib models + scaler)]
-    D --> E[evaluate<br/>metrics, ROC, confusion matrices]
+    B --> C[train_models<br/>fit both models, tune thresholds<br/>on a validation split]
+    C --> D[(artifacts/<br/>models, scaler, thresholds)]
+    D --> E[evaluate<br/>4 strategies, PR/ROC, drivers]
     D --> F[explain<br/>SHAP per alert]
+    D --> I[predict<br/>raw record to verdict]
     E --> G[(outputs/)]
     F --> G
     G --> H[Streamlit dashboard]
@@ -93,10 +122,29 @@ pip install -r requirements.txt
 python -m src.pipeline
 ```
 
-This downloads NSL-KDD (cached in `data/raw/`), trains both models into `artifacts/`,
-and writes `metrics.json`, `results.png` and the SHAP files to `outputs/`.
+This downloads NSL-KDD (cached in `data/raw/`), trains both models and tunes their
+thresholds into `artifacts/`, and writes metrics, plots and the SHAP files to `outputs/`.
 Run the stages separately with `python -m src.train_models`, `python -m src.evaluate` and
 `python -m src.explain`.
+
+Classify raw records with the saved models (two illustrative NSL-KDD-style connections):
+
+```bash
+python -m src.predict --demo
+```
+
+or from Python:
+
+```python
+from src.predict import predict_telemetry
+
+result = predict_telemetry({"duration": 0, "protocol_type": "tcp", ...})[0]  # all 41 features
+print(result["prediction"], result["top_drivers"])
+```
+
+`predict_telemetry` accepts a dict, a pandas Series or DataFrame, or a list of dicts, with
+categorical fields as text (`"tcp"`). It returns the verdict, both model scores against their
+thresholds, and the most unusual features for each record.
 
 ```bash
 streamlit run app.py
@@ -143,10 +191,13 @@ telemetry generator (this is what the tests and CI use).
 ├── app.py                          Streamlit dashboard
 ├── config/config.yaml              Data source, model parameters, paths
 ├── src/
-│   ├── data_preprocessing.py       Download, label-encode, scale, split
-│   ├── train_models.py             Train both models, save with joblib
-│   ├── evaluate.py                 Metrics, ROC, confusion matrices
+│   ├── data_preprocessing.py       Download, encode (persisted category maps), scale, split
+│   ├── train_models.py             Train both models, tune thresholds, save with joblib
+│   ├── thresholds.py               PR-curve threshold tuning and the four detection strategies
+│   ├── evaluate.py                 Strategy metrics, PR/ROC curves, confusion matrices
+│   ├── feature_analysis.py         Feature importances and drivers of flagged traffic
 │   ├── explain.py                  SHAP explanations per alert
+│   ├── predict.py                  predict_telemetry(): raw record to verdict
 │   ├── pipeline.py                 Train, evaluate, explain in one command
 │   ├── config.py                   Config and path helpers
 │   └── generate_synthetic_data.py  Offline fallback telemetry generator
@@ -161,8 +212,9 @@ telemetry generator (this is what the tests and CI use).
 
 - **Honest evaluation:** separate official test file, malicious-class precision, recall and
   F1, ROC-AUC. Accuracy alone is misleading on imbalanced security data.
-- **No leakage:** the scaler is fit on training data only, and the Isolation Forest only sees
-  benign training rows.
+- **No leakage:** the scaler is fit on training data only, the Isolation Forest only sees
+  benign training rows, and alert thresholds are tuned on a validation split of the training
+  data, never on the test set.
 - **Reproducible:** fixed random seeds, a single YAML config, pinned lower bounds.
 - **Explainable:** SHAP values for both models, exported per alert in
   `outputs/alert_explanations.csv`.

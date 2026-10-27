@@ -62,8 +62,10 @@ def explain(cfg: dict) -> pd.DataFrame | None:
     # The Isolation Forest score is higher for NORMAL rows, so negate it: positive
     # contributions then push toward "anomalous".
     iso_sv = -_malicious_shap(shap.TreeExplainer(iso), Xs)
-    iso_alert = iso.predict(Xs) == -1
-    rf_alert = rf.predict(Xs) == 1
+    # Explain the alerts the system actually raises, at the tuned thresholds.
+    thresholds = artifacts["metadata"]["thresholds"]
+    iso_alert = -iso.score_samples(Xs) > thresholds["isolation_forest"]
+    rf_alert = rf.predict_proba(Xs)[:, 1] >= thresholds["random_forest"]
 
     outputs_dir = resolve_path(cfg["paths"]["outputs_dir"])
     outputs_dir.mkdir(parents=True, exist_ok=True)

@@ -23,6 +23,16 @@ def test_encode_categoricals_handles_categories_only_in_test():
     assert train["protocol_type"].tolist() == ["tcp", "udp"]
 
 
+def test_apply_category_maps_encodes_names_and_flags_unseen_as_minus_one():
+    frame = pd.DataFrame({"protocol_type": ["tcp", "udp", "sctp"], "x": [1, 2, 3]})
+    maps = dp.fit_category_maps([frame.iloc[:2]], columns=["protocol_type"])
+
+    encoded = dp.apply_category_maps(frame, maps)
+
+    assert maps == {"protocol_type": ["tcp", "udp"]}
+    assert encoded["protocol_type"].tolist() == [0, 1, -1]
+
+
 def test_prepare_data_shapes_and_scaling(cfg):
     ds = dp.prepare_data(cfg)
 
