@@ -1,116 +1,185 @@
-# Data Center Cyber-Physical Security Capstone
+# Data Center Cyber-Physical Defense
 
-**Combining VAPT (Vulnerability Assessment & Penetration Testing) with an AI Anomaly-Detection Defense Layer.**
+[![CI](https://github.com/Aaravnauti/datacenter-security-capstone/actions/workflows/ci.yml/badge.svg)](https://github.com/Aaravnauti/datacenter-security-capstone/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/python-3.11%20|%203.12-blue)
 
-Sector: **Data Center** — the convergence of IT infrastructure, monitoring tools, and
-OT / Building Management Systems (BMS) such as HVAC and UPS power units.
+**AI anomaly detection for the IT/OT boundary of a data center, built alongside a VAPT attack
+reconstruction.** An unsupervised Isolation Forest and a supervised Random Forest detect
+intrusion behaviour that signature-based firewalls miss, and SHAP explains every alert.
 
-Courses: *Artificial Intelligence for Cyber Security* (ICS3120) + *VAPT* (ICS3102).
+Capstone project combining *Artificial Intelligence for Cyber Security* (ICS3120) and
+*Vulnerability Assessment & Penetration Testing* (ICS3102).
 
----
+## Why this matters
 
-## What this project is
+Data centers run on IT systems (servers, monitoring dashboards such as Cacti, IPMI/BMC
+interfaces) and on physical controls (UPS power, HVAC cooling). An attacker who breaches an
+exposed monitoring tool can pivot toward the facility network and manipulate telemetry, such
+as spoofed UPS battery data or altered cooling setpoints, until a thermal shutdown occurs.
+Known-signature tools often miss this behaviour. This project detects it from traffic
+statistics and explains why each alert fired.
 
-A data center depends on both IT systems (servers, monitoring dashboards) and
-Operational Technology (UPS, PDUs, HVAC). An attacker who breaches an exposed
-monitoring tool can pivot toward the facility-management network and manipulate
-*telemetry* — spoofing UPS battery data or shifting HVAC setpoints — to cause a
-thermal shutdown without ever touching the production OS.
+## Results
 
-This project has two halves that meet at that telemetry boundary:
+Trained on the official NSL-KDD training set (`KDDTrain+`) and evaluated on the separate
+test set (`KDDTest+`), which contains attack types that never appear in training. Metrics are
+for the malicious class (22,544 test connections: 12,833 malicious, 9,711 benign).
 
-1. **VAPT (offense, documented in a controlled lab):** reconnaissance, vulnerability
-   scoring (CVSS), and a kill chain mapped to MITRE ATT&CK — see [`docs/`](docs/).
-2. **AI defense layer (this repo's code):** an anomaly-detection + threat-classification
-   pipeline that flags unauthorized telemetry manipulation and intrusion patterns
-   that signature-based firewalls miss — see [`src/`](src/).
+| Model | Role | Precision | Recall | F1 | ROC-AUC |
+|---|---|---|---|---|---|
+| Isolation Forest | Unsupervised, trained on benign traffic only | 0.79 | **0.95** | 0.86 | 0.94 |
+| Random Forest | Supervised signature classifier | **0.97** | 0.62 | 0.76 | 0.96 |
 
-> **Scope & ethics.** All offensive work is performed only against an isolated lab you
-> own and are authorized to test. This repository contains **no weaponized exploit
-> code** — the VAPT material is detection/scoring/remediation documentation, which is
-> what earns marks and what a real blue team produces.
+**The two models fail in opposite ways, which is why the design uses both.**
+The Isolation Forest catches 95% of attacks, including unseen types, but raises 3,174 false
+alarms on benign traffic. The Random Forest raises only 274 false alarms but misses 38% of
+novel attacks. In a data center, false alarms are costly (an automated reaction to a false
+thermal alert can cause an outage), so the recommended design lets the anomaly detector
+raise a candidate and uses the classifier, context and a human to confirm it.
+See [`docs/enterprise_architecture.md`](docs/enterprise_architecture.md).
 
----
+An earlier version split a single file into train and test and reported a perfect 1.00.
+That result was an artifact of the split, so this repository evaluates on the separate
+official test file.
 
-## Repository layout
+![Evaluation results](outputs/results.png)
 
+## Architecture
+
+```mermaid
+flowchart LR
+    A[NSL-KDD<br/>KDDTrain+ / KDDTest+] --> B[data_preprocessing<br/>download, encode, scale]
+    B --> C[train_models<br/>Isolation Forest + Random Forest]
+    C --> D[(artifacts/<br/>joblib models + scaler)]
+    D --> E[evaluate<br/>metrics, ROC, confusion matrices]
+    D --> F[explain<br/>SHAP per alert]
+    E --> G[(outputs/)]
+    F --> G
+    G --> H[Streamlit dashboard]
 ```
-datacenter-security-capstone/
-├── README.md
-├── requirements.txt
-├── app.py                         # interactive Streamlit dashboard
-├── .streamlit/config.toml         # dashboard theme
-├── src/
-│   ├── anomaly_pipeline.py        # main AI defense layer (run this)
-│   └── generate_synthetic_data.py # offline fallback dataset generator
-├── docs/
-│   ├── kill_chain.md              # 4-stage kill chain mapped to MITRE ATT&CK for ICS
-│   ├── cvss_findings.md           # vulnerability findings + CVSS v3.1 vectors
-│   ├── remediation_playbook.md    # defensive controls & segmentation
-│   ├── case_study.md              # long-form documented case study
-│   └── enterprise_architecture.md # SIEM/SOAR, MLOps/XAI, Zero Trust, compliance, roadmap
-└── outputs/                       # plots & reports written here at runtime
-```
 
----
+Production target (SIEM ingestion, SOAR playbooks, Zero Trust segmentation) is described in
+[`docs/enterprise_architecture.md`](docs/enterprise_architecture.md).
 
-## Quick start
+## Threat model
+
+Defensive reconstruction mapped to MITRE ATT&CK. Each stage names the signal the AI layer
+watches for. Details in [`docs/kill_chain.md`](docs/kill_chain.md).
+
+| Stage | Technique | Detection signal |
+|---|---|---|
+| 1. Initial access | Exploit public-facing application (T1190), e.g. a Cacti-class monitoring tool, CVE-2022-46169 | Spike in failed logins and request rate on the monitoring segment |
+| 2. Credential harvest and lateral movement | Credential Access (TA0006), Lateral Movement (TA0008) | New internal connection pairs, connection-rate deviations |
+| 3. Subsystem manipulation | Manipulation of Control (T0831, ATT&CK for ICS) | Telemetry outside the learned benign baseline |
+| 4. Physical impact | Damage to Property (T0879, ATT&CK for ICS) | Alert should fire at stages 1 to 3, before this point |
+
+Vulnerability findings with CVSS v3.1 vectors are in [`docs/cvss_findings.md`](docs/cvss_findings.md),
+and the matching controls in [`docs/remediation_playbook.md`](docs/remediation_playbook.md).
+
+## Quickstart
+
+### Local
 
 ```bash
-pip install -r requirements.txt
-python src/anomaly_pipeline.py
+python -m venv .venv
 ```
 
-The pipeline:
-
-1. Loads the **NSL-KDD** benchmark dataset from a public mirror (real, citable data).
-   If offline, it falls back to the synthetic data-center telemetry generator.
-2. Preprocesses (encodes categoricals, scales features, stratified split).
-3. Trains an **Isolation Forest** on *benign-only* traffic (unsupervised, for unseen /
-   zero-day anomalies) and a **Random Forest** classifier (supervised, for known
-   attack signatures).
-4. Evaluates with **precision / recall / F1 / ROC-AUC** (not just accuracy — which is
-   misleading on imbalanced security data).
-5. Saves a confusion matrix and a feature-importance plot to `outputs/`.
-6. Explains alerts with **SHAP** (Explainable AI): global summary plots for both
-   models (`shap_summary_rf.png`, `shap_summary_iso.png`) and the top 3 reasons behind
-   each alert in a 500-row sample (`alert_explanations.csv`). If `shap` isn't
-   installed, this step is skipped and the rest still runs.
-
-### Interactive dashboard
+```bash
+# Windows PowerShell:  .venv\Scripts\Activate.ps1      macOS/Linux:  source .venv/bin/activate
+pip install -r requirements.txt
+```
 
 ```bash
-pip install -r requirements.txt
+python -m src.pipeline
+```
+
+This downloads NSL-KDD (cached in `data/raw/`), trains both models into `artifacts/`,
+and writes `metrics.json`, `results.png` and the SHAP files to `outputs/`.
+Run the stages separately with `python -m src.train_models`, `python -m src.evaluate` and
+`python -m src.explain`.
+
+```bash
 streamlit run app.py
 ```
 
-Opens at http://localhost:8501 with four tabs: **Detection** (live threshold sliders and
-a strategy comparison), **Explainability** (SHAP plots and per-alert reasons),
-**Kill chain and findings** (ATT&CK stages and the CVSS table), and **Enterprise
-roadmap**. The first load trains both models (about 30 seconds). Run
-`python src/anomaly_pipeline.py` once beforehand so the SHAP outputs exist.
+Opens the interactive dashboard at http://localhost:8501 (threshold sliders, SHAP plots,
+kill chain, roadmap).
 
-### Google Colab
-
-Open a new notebook and run:
-
-```python
-!pip install -q scikit-learn pandas matplotlib
-!wget -q https://raw.githubusercontent.com/<your-repo>/src/anomaly_pipeline.py
-%run anomaly_pipeline.py
+```bash
+pip install -r requirements-dev.txt
+pytest -q
+ruff check .
 ```
 
-Or paste the contents of [`src/anomaly_pipeline.py`](src/anomaly_pipeline.py) into a cell.
+### Docker
 
----
+```bash
+docker build -t datacenter-security-capstone .
+```
 
-## How the two halves connect
+```bash
+docker run --rm datacenter-security-capstone
+```
 
-| Kill-chain stage | Technique (MITRE ATT&CK-style) | What the AI layer watches for |
-|---|---|---|
-| Initial Access | Exploit public-facing monitoring app (e.g. Cacti, CVE-2022-46169) | Spike in failed logins / anomalous request rate |
-| Credential Harvest & Lateral Movement | Pivot toward facility mgmt (NUT / IPMI) | Unusual internal connection patterns |
-| Impact | Manipulated UPS / HVAC telemetry | Sensor values outside the learned baseline |
-| Defense | — | Real-time flag before physical thermal shutdown |
+To keep the results on your machine, mount the output folder (on Linux add `--user $(id -u)`):
 
-Full narrative in [`docs/case_study.md`](docs/case_study.md).
+```bash
+docker run --rm -v "$(pwd)/outputs:/app/outputs" datacenter-security-capstone
+```
+
+To run the dashboard from the container:
+
+```bash
+docker run --rm -p 8501:8501 datacenter-security-capstone streamlit run app.py --server.address 0.0.0.0
+```
+
+No network? Set `DCSEC_DATA_SOURCE=synthetic` to use the built-in synthetic data-center
+telemetry generator (this is what the tests and CI use).
+
+## Repository structure
+
+```
+.
+├── app.py                          Streamlit dashboard
+├── config/config.yaml              Data source, model parameters, paths
+├── src/
+│   ├── data_preprocessing.py       Download, label-encode, scale, split
+│   ├── train_models.py             Train both models, save with joblib
+│   ├── evaluate.py                 Metrics, ROC, confusion matrices
+│   ├── explain.py                  SHAP explanations per alert
+│   ├── pipeline.py                 Train, evaluate, explain in one command
+│   ├── config.py                   Config and path helpers
+│   └── generate_synthetic_data.py  Offline fallback telemetry generator
+├── tests/                          pytest suite (no network required)
+├── docs/                           Kill chain, CVSS, remediation, case study, enterprise architecture
+├── outputs/                        Metrics and plots from the last run
+├── Dockerfile
+└── .github/workflows/ci.yml        Lint, tests, smoke run, Docker build
+```
+
+## Engineering notes
+
+- **Honest evaluation:** separate official test file, malicious-class precision, recall and
+  F1, ROC-AUC. Accuracy alone is misleading on imbalanced security data.
+- **No leakage:** the scaler is fit on training data only, and the Isolation Forest only sees
+  benign training rows.
+- **Reproducible:** fixed random seeds, a single YAML config, pinned lower bounds.
+- **Explainable:** SHAP values for both models, exported per alert in
+  `outputs/alert_explanations.csv`.
+- **Tested:** unit tests for preprocessing, training, evaluation and SHAP; CI runs them on
+  Python 3.11 and 3.12, plus an end-to-end smoke run and a Docker build.
+
+## Limitations
+
+- NSL-KDD is a dated network-intrusion benchmark. It contains no UPS, HVAC or BMS telemetry,
+  so the data-center story is a use case, not something measured here. Performance must be
+  re-established on facility data before any real deployment.
+- Both models are tree ensembles on per-connection features. They do not model time, so
+  slow drift in a sensor value would need a sequence model (for example an LSTM autoencoder).
+- CVSS scores in `docs/cvss_findings.md` are illustrative until measured in a lab.
+
+## Ethics and scope
+
+All offensive testing is performed only in an isolated lab that the author owns and is
+authorized to test. This repository contains no exploit code. The VAPT material is
+reconstruction, scoring and remediation guidance.

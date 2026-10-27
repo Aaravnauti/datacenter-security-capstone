@@ -27,7 +27,7 @@ controls. Ordered by impact-to-effort.
 - Reject unsigned setpoint changes; log all control-plane writes.
 
 ## 6. Continuous AI anomaly monitoring (the detection layer)
-- Deploy the [`anomaly_pipeline`](../src/anomaly_pipeline.py) against live
+- Deploy the [detection pipeline](../src/pipeline.py) against live
   telemetry + network logs.
 - Train the Isolation Forest baseline on a known-clean window; alert on drift.
 - Tune the decision threshold for an acceptable false-positive rate — in a data

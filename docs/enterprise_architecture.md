@@ -30,7 +30,7 @@ and later stages *confirm, explain and triage* it.
 
 | Prototype | Production |
 |---|---|
-| `python anomaly_pipeline.py` on a laptop | Containerized inference service behind a message bus |
+| `python -m src.pipeline` on a laptop | Containerized inference service behind a message bus |
 | Static CSV / benchmark file | Streaming telemetry from live collectors |
 | Batch metrics printed to the terminal | Per-event anomaly score written back to the SIEM |
 | Plots in `outputs/` | SIEM dashboards + SOAR case records |
@@ -134,8 +134,8 @@ Every alert should carry the reason it fired.
 - **Analyst UI:** show the explanation in the SIEM alert view and the SOAR case. The
   analyst should not have to open a notebook.
 
-**Implemented in the prototype:** `explain_alerts()` in
-[`src/anomaly_pipeline.py`](../src/anomaly_pipeline.py) runs SHAP TreeExplainer on
+**Implemented in the prototype:** `explain()` in
+[`src/explain.py`](../src/explain.py) runs SHAP TreeExplainer on
 both models and writes:
 - `outputs/shap_summary_iso.png` and `outputs/shap_summary_rf.png`: global views of
   what drives each model.
