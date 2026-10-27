@@ -11,14 +11,14 @@ from __future__ import annotations
 
 import logging
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import unquote
 
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.preprocessing import StandardScaler
 
 from .config import resolve_path
 from .generate_synthetic_data import generate
@@ -50,6 +50,7 @@ class RawData:
     X_test: pd.DataFrame
     y_test: pd.Series
     source: str
+    categories: dict[str, list[str]] = field(default_factory=dict)
 
 
 @dataclass
@@ -63,6 +64,7 @@ class Dataset:
     feature_names: list[str]
     scaler: StandardScaler
     source: str
+    categories: dict[str, list[str]] = field(default_factory=dict)
 
 
 def to_binary_label(labels: pd.Series) -> pd.Series:
@@ -70,20 +72,36 @@ def to_binary_label(labels: pd.Series) -> pd.Series:
     return (labels != BENIGN_LABEL).astype(int)
 
 
+def fit_category_maps(
+    frames: list[pd.DataFrame], columns: list[str] = CATEGORICAL
+) -> dict[str, list[str]]:
+    """Sorted category names per column. A category's position is its integer code.
+
+    Uses category names only, never labels or numeric values. Including the test
+    frame avoids errors for categories that only appear in the test file.
+    """
+    return {
+        col: sorted(pd.concat([frame[col] for frame in frames]).astype(str).unique())
+        for col in columns
+        if all(col in frame for frame in frames)
+    }
+
+
+def apply_category_maps(df: pd.DataFrame, categories: dict[str, list[str]]) -> pd.DataFrame:
+    """Replace category names with their integer codes. Unseen categories become -1."""
+    df = df.copy()
+    for col, names in categories.items():
+        codes = {name: i for i, name in enumerate(names)}
+        df[col] = df[col].astype(str).map(codes).fillna(-1).astype(int)
+    return df
+
+
 def encode_categoricals(
     train: pd.DataFrame, test: pd.DataFrame, columns: list[str] = CATEGORICAL
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Label-encode columns with encoders fit on train and test together.
-
-    Fitting on both avoids errors for categories that only appear in the test
-    file. It uses category names only, never labels or numeric values.
-    """
-    train, test = train.copy(), test.copy()
-    for col in columns:
-        encoder = LabelEncoder().fit(pd.concat([train[col], test[col]]))
-        train[col] = encoder.transform(train[col])
-        test[col] = encoder.transform(test[col])
-    return train, test
+    """Integer-encode categorical columns consistently across train and test."""
+    categories = fit_category_maps([train, test], columns)
+    return apply_category_maps(train, categories), apply_category_maps(test, categories)
 
 
 def _download(url: str, cache_dir: Path) -> Path:
@@ -109,14 +127,18 @@ def load_nsl_kdd(cfg: dict) -> RawData:
         frames.append(pd.read_csv(path, names=NSL_KDD_COLUMNS).drop(columns=["difficulty"]))
     train, test = frames
     y_train, y_test = to_binary_label(train["label"]), to_binary_label(test["label"])
-    X_train, X_test = encode_categoricals(
-        train.drop(columns=["label"]), test.drop(columns=["label"])
-    )
+    train_x, test_x = train.drop(columns=["label"]), test.drop(columns=["label"])
+    categories = fit_category_maps([train_x, test_x])
+    X_train = apply_category_maps(train_x, categories)
+    X_test = apply_category_maps(test_x, categories)
     logger.info(
         "Loaded NSL-KDD: train %s rows, test %s rows, %s features.",
         f"{len(X_train):,}", f"{len(X_test):,}", X_train.shape[1],
     )
-    return RawData(X_train, y_train, X_test, y_test, "NSL-KDD (train=KDDTrain+, test=KDDTest+)")
+    return RawData(
+        X_train, y_train, X_test, y_test,
+        "NSL-KDD (train=KDDTrain+, test=KDDTest+)", categories,
+    )
 
 
 def load_synthetic(cfg: dict) -> RawData:
@@ -157,4 +179,5 @@ def prepare_data(cfg: dict) -> Dataset:
         feature_names=list(raw.X_train.columns),
         scaler=scaler,
         source=raw.source,
+        categories=raw.categories,
     )

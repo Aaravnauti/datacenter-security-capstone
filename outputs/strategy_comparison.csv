@@ -1,0 +1,5 @@
+Strategy,Recall,Precision,F1,Accuracy,False alarms,Missed attacks
+Isolation forest,0.621,0.9761,0.7591,0.7756,195,4864
+Random forest,0.9789,0.9087,0.9425,0.932,1262,271
+Either flags,0.9789,0.9076,0.9419,0.9312,1279,271
+Both flag,0.621,0.9782,0.7597,0.7763,178,4864

@@ -20,8 +20,25 @@ models:
     n_jobs: -1
   random_forest:
     n_estimators: 200
+    class_weight: balanced_subsample   # penalize missed attacks; null disables
     random_state: 42
     n_jobs: -1
+
+# Decision thresholds turn model scores into alerts.
+#   Isolation Forest: alert when anomaly score > threshold (higher = fewer alerts)
+#   Random Forest:    alert when P(malicious) >= threshold (lower = more alerts)
+thresholds:
+  mode: auto                 # auto = tune on a validation split of the TRAINING data
+                             # manual = use the fixed values below
+  validation_size: 0.2       # share of training data held out for tuning
+  min_precision: 0.95        # auto: highest recall whose precision stays above this
+  beta: 1.0                  # auto fallback: F-beta score if min_precision is unreachable
+  manual:
+    isolation_forest: 0.45
+    random_forest: 0.40
+
+inference:
+  strategy: either_flags     # isolation_forest | random_forest | either_flags | both_flag
 
 explain:
   enabled: true

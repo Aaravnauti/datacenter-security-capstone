@@ -4,7 +4,7 @@ Data center cyber-physical defense - interactive dashboard.
 Run:
     streamlit run app.py
 
-Trains the Isolation Forest + Random Forest (src/train_models.py) once, cached,
+Loads the models saved by `python -m src.pipeline` (or trains them once, cached)
 and lets you explore detection trade-offs, SHAP explanations, the kill chain
 and the enterprise roadmap.
 """
@@ -22,10 +22,17 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 from src.config import load_config, resolve_path  # noqa: E402
 from src.data_preprocessing import prepare_data  # noqa: E402
-from src.train_models import fit_models  # noqa: E402
+from src.thresholds import STRATEGIES, flag_connections, strategy_metrics  # noqa: E402
+from src.train_models import fit_and_tune, load_artifacts  # noqa: E402
 
 CFG = load_config()
 OUTPUTS = resolve_path(CFG["paths"]["outputs_dir"])
+LABELS = {
+    "isolation_forest": "Isolation forest",
+    "random_forest": "Random forest",
+    "either_flags": "Either flags",
+    "both_flag": "Both flag",
+}
 
 st.set_page_config(
     page_title="Data center defense",
@@ -37,36 +44,42 @@ st.set_page_config(
 # --------------------------------------------------------------------------- #
 # Data and models (cached: trained once per server session)
 # --------------------------------------------------------------------------- #
-@st.cache_resource(show_spinner="Training both models on NSL-KDD (about 30 seconds the first time)...")
-def train_models() -> dict:
+@st.cache_resource(show_spinner="Loading models (trains on the first run, about a minute)...")
+def load_models() -> dict:
     ds = prepare_data(CFG)
-    iso, clf = fit_models(ds.X_train, ds.y_train, CFG)
+
+    # Reuse models saved by `python -m src.pipeline` when they match this data.
+    try:
+        art = load_artifacts(resolve_path(CFG["paths"]["artifacts_dir"]))
+        meta = art["metadata"]
+        reuse = meta["source"] == ds.source and meta["feature_names"] == ds.feature_names
+    except FileNotFoundError:
+        reuse = False
+
+    if reuse:
+        iso, rf, thresholds = art["iso"], art["rf"], meta["thresholds"]
+        origin = "saved models in artifacts/"
+    else:
+        iso, rf, thresholds = fit_and_tune(ds.X_train, ds.y_train, CFG)
+        origin = "trained in this session"
+
     return {
         "source": ds.source,
+        "origin": origin,
         "n_train": len(ds.y_train),
         "n_test": len(ds.y_test),
         "n_features": len(ds.feature_names),
         "y": ds.y_test.to_numpy(),
         "iso_score": -iso.score_samples(ds.X_test),   # higher = more anomalous
-        "iso_default": float(-iso.offset_),           # the pipeline's default threshold
-        "rf_proba": clf.predict_proba(ds.X_test)[:, 1],
-        "importances": pd.Series(clf.feature_importances_, index=ds.feature_names),
+        "rf_proba": rf.predict_proba(ds.X_test)[:, 1],
+        "thresholds": thresholds,                     # tuned on a training-data validation split
+        "defaults": {"isolation_forest": float(-iso.offset_), "random_forest": 0.5},
+        "importances": pd.Series(rf.feature_importances_, index=ds.feature_names),
     }
 
 
-def evaluate(y: np.ndarray, pred: np.ndarray) -> dict:
-    tp = int(((pred == 1) & (y == 1)).sum())
-    fp = int(((pred == 1) & (y == 0)).sum())
-    fn = int(((pred == 0) & (y == 1)).sum())
-    tn = int(((pred == 0) & (y == 0)).sum())
-    precision = tp / (tp + fp) if tp + fp else 0.0
-    recall = tp / (tp + fn) if tp + fn else 0.0
-    f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
-    return {
-        "tp": tp, "fp": fp, "fn": fn, "tn": tn,
-        "precision": precision, "recall": recall, "f1": f1,
-        "accuracy": (tp + tn) / len(y),
-    }
+def metrics_for(flagged: np.ndarray) -> dict:
+    return strategy_metrics(data["y"], flagged)
 
 
 # --------------------------------------------------------------------------- #
@@ -78,32 +91,44 @@ st.caption(
     "and UPS/HVAC telemetry. ICS3120 + VAPT capstone."
 )
 
-data = train_models()
+data = load_models()
+tuned = data["thresholds"]
+
+
+def _clamp(value: float, low: float, high: float) -> float:
+    return float(min(max(value, low), high))
+
 
 with st.sidebar:
     st.header("Detector settings", icon=":material/tune:")
-    lo, hi = float(data["iso_score"].min()), float(data["iso_score"].max())
+    lo, hi = round(float(data["iso_score"].min()), 3), round(float(data["iso_score"].max()), 3)
     iso_t = st.slider(
         "Isolation forest threshold",
-        min_value=round(lo, 3),
-        max_value=round(hi, 3),
-        value=round(data["iso_default"], 3),
+        min_value=lo,
+        max_value=hi,
+        value=round(_clamp(tuned["isolation_forest"], lo, hi), 3),
         step=0.005,
         help="Alert when the anomaly score is above this. Higher means fewer, "
         "more confident alerts (fewer false alarms, more missed attacks).",
     )
     rf_t = st.slider(
         "Random forest threshold",
-        min_value=0.05,
+        min_value=0.005,
         max_value=0.95,
-        value=0.5,
-        step=0.05,
-        help="Alert when the predicted probability of 'malicious' reaches this.",
+        value=round(_clamp(tuned["random_forest"], 0.005, 0.95), 3),
+        step=0.005,
+        help="Alert when the predicted probability of 'malicious' reaches this. "
+        "Lower means more alerts and fewer missed attacks.",
+    )
+    st.caption(
+        f"Sliders start at the {tuned['mode']}-tuned thresholds: "
+        f"{tuned['isolation_forest']:.3f} and {tuned['random_forest']:.3f}."
     )
     st.caption(
         f"Data: {data['source']}  \n"
         f"{data['n_train']:,} training rows, {data['n_test']:,} test rows, "
-        f"{data['n_features']} features."
+        f"{data['n_features']} features.  \n"
+        f"Models: {data['origin']}."
     )
     st.caption(
         "All offensive testing is done only in an isolated lab you own and are "
@@ -111,14 +136,9 @@ with st.sidebar:
     )
 
 y = data["y"]
-iso_pred = data["iso_score"] > iso_t
-rf_pred = data["rf_proba"] >= rf_t
-strategies = {
-    "Isolation forest": iso_pred,
-    "Random forest": rf_pred,
-    "Either flags": iso_pred | rf_pred,
-    "Both flag": iso_pred & rf_pred,
-}
+current = {"isolation_forest": iso_t, "random_forest": rf_t}
+flags = flag_connections(data["iso_score"], data["rf_proba"], current)
+strategies = {LABELS[name]: flags[name] for name in STRATEGIES}
 
 tab_detect, tab_explain, tab_chain, tab_road = st.tabs(
     [
@@ -136,11 +156,11 @@ with tab_detect:
     choice = st.segmented_control(
         "Detection strategy",
         list(strategies),
-        default="Isolation forest",
-        help="'Either flags' catches the most attacks. 'Both flag' gives the fewest "
-        "false alarms.",
-    ) or "Isolation forest"
-    m = evaluate(y, strategies[choice].astype(int))
+        default="Either flags",
+        help="'Either flags' alerts when either model flags a connection (most "
+        "coverage). 'Both flag' alerts only when both agree (fewest false alarms).",
+    ) or "Either flags"
+    m = metrics_for(strategies[choice])
 
     with st.container(horizontal=True):
         st.metric("Attacks caught (recall)", f"{m['recall']:.1%}", border=True)
@@ -154,11 +174,11 @@ with tab_detect:
             st.subheader("What happened to the traffic")
             st.caption(f"{len(y):,} unseen test connections, strategy: {choice.lower()}")
             with st.container(horizontal=True):
-                st.metric("Attacks caught", f"{m['tp']:,}", border=True)
-                st.metric("Attacks missed", f"{m['fn']:,}", border=True)
+                st.metric("Attacks caught", f"{m['true_positives']:,}", border=True)
+                st.metric("Attacks missed", f"{m['missed_attacks']:,}", border=True)
             with st.container(horizontal=True):
-                st.metric("False alarms", f"{m['fp']:,}", border=True)
-                st.metric("Correctly ignored", f"{m['tn']:,}", border=True)
+                st.metric("False alarms", f"{m['false_alarms']:,}", border=True)
+                st.metric("Correctly ignored", f"{m['true_negatives']:,}", border=True)
             st.caption(
                 "In a data center every false alarm costs analyst time, and an "
                 "automated reaction to a false thermal alert can cause an outage."
@@ -166,34 +186,56 @@ with tab_detect:
 
     with right:
         with st.container(border=True):
-            st.subheader("Isolation forest threshold trade-off")
+            st.subheader("Threshold trade-off")
+            curve_model = st.segmented_control(
+                "Model", ["Random forest", "Isolation forest"], default="Random forest"
+            ) or "Random forest"
+            is_rf = curve_model == "Random forest"
+            scores = data["rf_proba"] if is_rf else data["iso_score"]
             ts = np.linspace(
-                np.quantile(data["iso_score"], 0.02), np.quantile(data["iso_score"], 0.98), 60
+                np.quantile(scores, 0.02) if not is_rf else 0.005,
+                np.quantile(scores, 0.98) if not is_rf else 0.95,
+                60,
             )
             rows = []
             for t in ts:
-                r = evaluate(y, (data["iso_score"] > t).astype(int))
+                r = metrics_for(scores > t)
                 rows.append({"Threshold": t, "Precision": r["precision"], "Recall": r["recall"]})
             st.line_chart(pd.DataFrame(rows), x="Threshold", y=["Precision", "Recall"])
             st.caption(
-                f"Current threshold: {iso_t:.3f}. Raising it removes false alarms but "
-                "starts to miss attacks. Move the slider in the sidebar."
+                f"Current threshold: {rf_t if is_rf else iso_t:.3f}. "
+                + (
+                    "Lowering it catches more attacks but raises more false alarms."
+                    if is_rf
+                    else "Raising it removes false alarms but starts to miss attacks."
+                )
+                + " Move the slider in the sidebar."
             )
 
     with st.container(border=True):
         st.subheader("Strategy comparison")
+        basis = st.segmented_control(
+            "Thresholds",
+            ["Current sliders", "Model defaults"],
+            default="Current sliders",
+            help="Model defaults are the untuned thresholds: Isolation Forest at its "
+            "contamination-based cutoff and Random Forest at 0.50.",
+        ) or "Current sliders"
+        shown = flags if basis == "Current sliders" else flag_connections(
+            data["iso_score"], data["rf_proba"], data["defaults"]
+        )
         rows = []
-        for name, pred in strategies.items():
-            r = evaluate(y, pred.astype(int))
+        for key in STRATEGIES:
+            r = metrics_for(shown[key])
             rows.append(
                 {
-                    "Strategy": name,
+                    "Strategy": LABELS[key],
                     "Recall": r["recall"],
                     "Precision": r["precision"],
                     "F1": r["f1"],
                     "Accuracy": r["accuracy"],
-                    "False alarms": r["fp"],
-                    "Missed attacks": r["fn"],
+                    "False alarms": r["false_alarms"],
+                    "Missed attacks": r["missed_attacks"],
                 }
             )
         st.dataframe(
@@ -209,9 +251,10 @@ with tab_detect:
             },
         )
         st.caption(
-            "The two models fail in opposite ways: the Isolation Forest catches unseen "
-            "attacks but raises false alarms, while the Random Forest is precise but "
-            "misses novel attack types."
+            "At default thresholds the models fail in opposite ways: the Isolation Forest "
+            "catches unseen attacks but raises false alarms, while the Random Forest is "
+            "precise but misses novel attack types. Tuning the thresholds on a validation "
+            "split moves the Random Forest to a much higher recall."
         )
 
     with st.container(border=True):
