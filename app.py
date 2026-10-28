@@ -373,10 +373,10 @@ with tab_chain:
         findings = pd.DataFrame(
             [
                 ("F-01", "Unauthenticated RCE in monitoring tool", "AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H", 9.8, "Critical"),
-                ("F-02", "Plaintext credentials in config files", "AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:L/A:N", 6.0, "Medium"),
+                ("F-02", "Plaintext credentials in config files", "AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:L/A:N", 6.1, "Medium"),
                 ("F-03", "IPMI/BMC reachable, weak credentials", "AV:A/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H", 9.6, "Critical"),
-                ("F-04", "Unauthenticated UPS/HVAC control writes", "AV:A/AC:L/PR:N/UI:N/S:C/C:L/I:H/A:H", 9.3, "Critical"),
-                ("F-05", "No IT/OT network segmentation", "AV:A/AC:L/PR:L/UI:N/S:C/C:L/I:H/A:H", 8.5, "High"),
+                ("F-04", "Unauthenticated UPS/HVAC control writes", "AV:A/AC:L/PR:N/UI:N/S:C/C:L/I:H/A:H", 9.6, "Critical"),
+                ("F-05", "No IT/OT network segmentation", "AV:A/AC:L/PR:L/UI:N/S:C/C:L/I:H/A:H", 8.9, "High"),
             ],
             columns=["ID", "Finding", "Vector", "CVSS", "Severity"],
         )

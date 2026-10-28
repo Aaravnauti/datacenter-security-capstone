@@ -101,5 +101,45 @@
       "true_negatives": 9433,
       "false_alarm_rate": 0.0286
     }
+  },
+  "recall_by_attack_novelty": {
+    "attacks_of_seen_types": 9083,
+    "attacks_of_unseen_types": 3750,
+    "tuned_thresholds": {
+      "isolation_forest": {
+        "seen_types": 0.6289,
+        "unseen_types": 0.6019
+      },
+      "random_forest": {
+        "seen_types": 0.995,
+        "unseen_types": 0.9397
+      },
+      "either_flags": {
+        "seen_types": 0.995,
+        "unseen_types": 0.9397
+      },
+      "both_flag": {
+        "seen_types": 0.6289,
+        "unseen_types": 0.6019
+      }
+    },
+    "default_thresholds": {
+      "isolation_forest": {
+        "seen_types": 0.9289,
+        "unseen_types": 0.9907
+      },
+      "random_forest": {
+        "seen_types": 0.7671,
+        "unseen_types": 0.2491
+      },
+      "either_flags": {
+        "seen_types": 0.9289,
+        "unseen_types": 0.9907
+      },
+      "both_flag": {
+        "seen_types": 0.7671,
+        "unseen_types": 0.2491
+      }
+    }
   }
 }
