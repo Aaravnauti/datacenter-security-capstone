@@ -152,6 +152,32 @@ print(result["prediction"], result["top_drivers"])
 categorical fields as text (`"tcp"`). It returns the verdict, both model scores against their
 thresholds, and the most unusual features for each record.
 
+### Live alert replay
+
+Stream recorded connections through the saved models, paced like live traffic. An alert is
+raised, with the reasons, whenever the chosen strategy flags a connection:
+
+```bash
+python -m src.live_monitor --count 300 --attack-rate 0.10 --rate 15
+```
+
+```text
+[03:17:36] ALERT #2   HIGH   conn 20   IF 0.625 / RF 1.000  why: flag=REJ, same_srv_rate=0.02, ...  [replay check: REAL ATTACK - neptune]
+[03:17:36] ALERT #3   MEDIUM conn 21   IF 0.437 / RF 0.650  why: protocol_type=icmp, logged_in=0, ... [replay check: FALSE ALARM]
+```
+
+Alerts are written to `outputs/live_alerts.jsonl`, and the same stream is available as the
+**Live monitor** tab of the dashboard. Severity is high when both models flag a connection and
+medium when only one does. This is a replay of a labeled benchmark, not a packet capture; the
+"replay check" is only possible because the replayed connections are labeled. A real deployment
+would put a flow collector in front of the same scoring step.
+
+**Expect many false alarms when attacks are rare.** The 0.91 precision reported below was
+measured on a test set that is 57% attacks. In the replay, with the default "either flags"
+strategy: at 10% attacks about 44% of alerts are real, and at 1% attacks only about 7% are
+(283 alerts, 263 of them false). A small false-alarm rate applied to a large amount of benign
+traffic outweighs a few real attacks. See the report for the full table.
+
 ```bash
 streamlit run app.py
 ```
@@ -204,6 +230,7 @@ telemetry generator (this is what the tests and CI use).
 │   ├── feature_analysis.py         Feature importances and drivers of flagged traffic
 │   ├── explain.py                  SHAP explanations per alert
 │   ├── predict.py                  predict_telemetry(): raw record to verdict
+│   ├── live_monitor.py             Live alert replay: stream connections, raise alerts
 │   ├── pipeline.py                 Train, evaluate, explain in one command
 │   ├── config.py                   Config and path helpers
 │   └── generate_synthetic_data.py  Offline fallback telemetry generator

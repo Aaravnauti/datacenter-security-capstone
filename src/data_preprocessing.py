@@ -157,6 +157,23 @@ def load_synthetic(cfg: dict) -> RawData:
     return RawData(X_train, y_train, X_test, y_test, "synthetic-telemetry")
 
 
+def load_replay_frame(cfg: dict, synthetic: bool = False) -> pd.DataFrame:
+    """Recorded test connections in raw form, for replaying as a live stream.
+
+    Categorical fields stay as text (for example "tcp"), exactly as a record would
+    arrive from a collector. `attack_name` holds the ground truth ("normal" or an
+    attack type) and is only used to score the replay; it is not a model input.
+    """
+    if synthetic:
+        raw = load_synthetic(cfg)
+        frame = raw.X_test.reset_index(drop=True).copy()
+        frame["attack_name"] = np.where(raw.y_test.to_numpy() == 1, "attack", BENIGN_LABEL)
+        return frame
+    path = _download(cfg["data"]["test_url"], resolve_path(cfg["data"]["cache_dir"]))
+    frame = pd.read_csv(path, names=NSL_KDD_COLUMNS).drop(columns=["difficulty"])
+    return frame.rename(columns={"label": "attack_name"})
+
+
 def load_and_encode(cfg: dict) -> RawData:
     """Load the configured data source, falling back to synthetic data if allowed."""
     data_cfg = cfg["data"]

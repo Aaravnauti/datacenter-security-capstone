@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 from src.config import load_config, resolve_path  # noqa: E402
 from src.data_preprocessing import prepare_data  # noqa: E402
+from src.live_monitor import monitor, reasons_text, summarize  # noqa: E402
 from src.thresholds import STRATEGIES, flag_connections, strategy_metrics  # noqa: E402
 from src.train_models import fit_and_tune, load_artifacts  # noqa: E402
 
@@ -140,9 +141,10 @@ current = {"isolation_forest": iso_t, "random_forest": rf_t}
 flags = flag_connections(data["iso_score"], data["rf_proba"], current)
 strategies = {LABELS[name]: flags[name] for name in STRATEGIES}
 
-tab_detect, tab_explain, tab_chain, tab_road = st.tabs(
+tab_detect, tab_live, tab_explain, tab_chain, tab_road = st.tabs(
     [
         ":material/query_stats: Detection",
+        ":material/sensors: Live monitor",
         ":material/psychology: Explainability",
         ":material/account_tree: Kill chain and findings",
         ":material/map: Enterprise roadmap",
@@ -261,6 +263,98 @@ with tab_detect:
         st.subheader("Features the Random Forest relies on")
         top = data["importances"].nlargest(10).rename_axis("Feature").reset_index(name="Importance")
         st.bar_chart(top, x="Feature", y="Importance", horizontal=True, sort="-Importance")
+
+# --------------------------------------------------------------------------- #
+# Live monitor
+# --------------------------------------------------------------------------- #
+with tab_live:
+    st.caption(
+        "Replays recorded connections through the saved models as if they were arriving "
+        "live. Each one is scored, and an alert is raised with the reasons when the "
+        "strategy flags it. This is a replay of a benchmark, not a packet capture."
+    )
+    models_saved = (resolve_path(CFG["paths"]["artifacts_dir"]) / "isolation_forest.joblib").exists()
+    if not models_saved:
+        st.warning(
+            "No saved models found. Run `python -m src.pipeline` first.",
+            icon=":material/warning:",
+        )
+    else:
+        c1, c2, c3, c4 = st.columns(4)
+        n_conn = c1.number_input("Connections", min_value=50, max_value=2000, value=300, step=50)
+        attack_pct = c2.slider("Share of attacks in traffic", 1, 50, 10, format="%d%%")
+        speed = c3.slider("Speed (connections per second)", 5, 100, 25)
+        live_choice = c4.selectbox(
+            "Strategy", list(STRATEGIES), index=2, format_func=lambda k: LABELS[k],
+            help="Which detection strategy raises alerts.",
+        )
+        start = st.button("Start monitoring", type="primary", icon=":material/play_arrow:")
+
+        kpi_slot = st.empty()
+        chart_slot = st.empty()
+        feed_title = st.empty()
+        feed_slot = st.empty()
+
+        if start:
+            feed_rows, history = [], []
+            for event in monitor(
+                CFG, count=int(n_conn), attack_fraction=attack_pct / 100, rate=float(speed),
+                strategy=live_choice,
+            ):
+                s = event["stats"]
+                if event["alert"]:
+                    feed_rows.append(
+                        {
+                            "Time": event["time"][11:],
+                            "Severity": event["severity"],
+                            "Connection": event["seq"],
+                            "Why": reasons_text(event),
+                            "IF score": event["result"]["isolation_forest"]["score"],
+                            "RF probability": event["result"]["random_forest"]["probability"],
+                            "Replay check": (
+                                f"real: {event['attack_name']}" if event["is_attack"] else "false alarm"
+                            ),
+                        }
+                    )
+                    feed_title.subheader("Alerts", icon=":material/notifications_active:")
+                    feed_slot.dataframe(
+                        pd.DataFrame(feed_rows).iloc[::-1].head(25), hide_index=True,
+                        column_config={
+                            "IF score": st.column_config.NumberColumn(format="%.3f"),
+                            "RF probability": st.column_config.NumberColumn(format="%.3f"),
+                        },
+                    )
+                history.append({"Connections": s["processed"], "Alerts": s["alerts"],
+                                "Real attacks caught": s["real_alerts"], "False alarms": s["false_alarms"]})
+                if event["alert"] or s["processed"] % 5 == 0:
+                    with kpi_slot.container(horizontal=True):
+                        st.metric("Connections", f"{s['processed']:,}", border=True)
+                        st.metric("Alerts raised", f"{s['alerts']:,}", border=True)
+                        st.metric("Real attacks caught", f"{s['real_alerts']:,}", border=True)
+                        st.metric("False alarms", f"{s['false_alarms']:,}", border=True)
+                        st.metric("Attacks missed", f"{s['missed_attacks']:,}", border=True)
+                if s["processed"] % 10 == 0:
+                    chart_slot.line_chart(
+                        pd.DataFrame(history).set_index("Connections")[
+                            ["Real attacks caught", "False alarms"]
+                        ]
+                    )
+
+            final = summarize(s)
+            precision = final["precision"]
+            st.success(
+                f"Finished: {final['alerts']} alerts from {final['processed']} connections. "
+                f"{final['real_alerts']} of {final['attacks_seen']} attacks caught, "
+                f"{final['false_alarms']} false alarms"
+                + (f" (alert precision {precision:.0%})." if precision is not None else "."),
+                icon=":material/check_circle:",
+            )
+            st.caption(
+                "Alert precision falls as attacks get rarer, because a small false-alarm rate "
+                "applied to lots of benign traffic outweighs a few real attacks. Try lowering "
+                "the share of attacks, or switching to 'Both flag', to see the trade-off."
+            )
+            st.caption("Alerts are also saved to outputs/live_alerts.jsonl when run from the command line.")
 
 # --------------------------------------------------------------------------- #
 # Explainability
