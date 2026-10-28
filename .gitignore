@@ -10,3 +10,7 @@ __pycache__/
 data/
 artifacts/
 datacenter_telemetry_dataset.csv
+
+# Per-run output of the live monitor
+outputs/live_alerts.jsonl
+outputs/live_summary.json
