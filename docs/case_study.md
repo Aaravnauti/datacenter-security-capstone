@@ -9,11 +9,12 @@ under the relevant sections.*
 ## 1. Executive Summary
 A data center's environmental and power controls (UPS, PDU, HVAC) are increasingly
 network-reachable through Building Management Systems and remote-management
-interfaces. This case study reconstructs — in an authorized lab — how an attacker
-could breach an exposed monitoring tool, pivot to facility-management hosts, and
-manipulate telemetry to force a thermal shutdown. It then demonstrates an AI
-anomaly-detection layer that flags the manipulation before physical impact, catching
-behavior that signature-based firewalls miss.
+interfaces. This case study reconstructs how an attacker could breach an exposed
+monitoring tool, pivot to facility-management hosts, and manipulate telemetry to force
+a thermal shutdown. It then evaluates an AI anomaly-detection layer on a public
+network-intrusion benchmark (NSL-KDD) to show how such a layer flags abnormal behavior
+that signature-based firewalls can miss. The benchmark contains no UPS or HVAC telemetry,
+so applying the layer to facility data is future work.
 
 ## 2. Sector & Threat Landscape
 Modern data centers fuse IT (servers, monitoring dashboards) with Operational

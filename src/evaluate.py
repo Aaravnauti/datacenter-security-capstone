@@ -23,6 +23,7 @@ import matplotlib
 
 matplotlib.use("Agg")  # headless-safe (CI, Docker, Colab)
 import matplotlib.pyplot as plt  # noqa: E402
+import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 from sklearn.metrics import (  # noqa: E402
     ConfusionMatrixDisplay,
@@ -34,7 +35,7 @@ from sklearn.metrics import (  # noqa: E402
 )
 
 from .config import load_config, resolve_path, setup_logging  # noqa: E402
-from .data_preprocessing import load_and_encode  # noqa: E402
+from .data_preprocessing import BENIGN_LABEL, load_and_encode  # noqa: E402
 from .feature_analysis import flagged_drivers, global_importances  # noqa: E402
 from .thresholds import STRATEGIES, evaluate_strategies, flag_connections  # noqa: E402
 from .train_models import load_artifacts  # noqa: E402
@@ -66,6 +67,31 @@ def comparison_table(strategies: dict[str, dict]) -> pd.DataFrame:
             for name, m in strategies.items()
         ]
     )
+
+
+def novelty_masks(raw) -> tuple[np.ndarray, np.ndarray] | None:
+    """Masks for test attacks of a type seen in training and of a type never seen.
+
+    Returns None when attack names are unavailable (synthetic data).
+    """
+    if raw.train_attack_names is None or raw.test_attack_names is None:
+        return None
+    seen_types = set(raw.train_attack_names) - {BENIGN_LABEL}
+    names = raw.test_attack_names
+    is_attack = (names != BENIGN_LABEL).to_numpy()
+    seen = is_attack & names.isin(seen_types).to_numpy()
+    return seen, is_attack & ~seen
+
+
+def recall_by_novelty(flags: dict[str, np.ndarray], seen, unseen) -> dict:
+    """Recall on attacks of types seen in training versus types never seen."""
+    return {
+        name: {
+            "seen_types": round(float(flagged[seen].mean()), 4),
+            "unseen_types": round(float(flagged[unseen].mean()), 4),
+        }
+        for name, flagged in flags.items()
+    }
 
 
 def save_results_plot(y, iso_score, rf_proba, strategies, importances, path) -> None:
@@ -150,6 +176,18 @@ def evaluate(cfg: dict) -> dict:
         "baseline_default_thresholds": baseline,
     }
 
+    masks = novelty_masks(raw)
+    if masks is not None:
+        seen, unseen = masks
+        metrics["recall_by_attack_novelty"] = {
+            "attacks_of_seen_types": int(seen.sum()),
+            "attacks_of_unseen_types": int(unseen.sum()),
+            "tuned_thresholds": recall_by_novelty(flags, seen, unseen),
+            "default_thresholds": recall_by_novelty(
+                flag_connections(iso_score, rf_proba, defaults), seen, unseen
+            ),
+        }
+
     outputs_dir = resolve_path(cfg["paths"]["outputs_dir"])
     outputs_dir.mkdir(parents=True, exist_ok=True)
     (outputs_dir / "metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
@@ -172,6 +210,24 @@ def evaluate(cfg: dict) -> dict:
     print(table.to_string(index=False))
     print("\nFor reference, the same strategies at default thresholds:")
     print(comparison_table(baseline).to_string(index=False))
+
+    if "recall_by_attack_novelty" in metrics:
+        nov = metrics["recall_by_attack_novelty"]
+        print(
+            f"\nRecall by attack novelty ({nov['attacks_of_seen_types']:,} attacks of types "
+            f"seen in training, {nov['attacks_of_unseen_types']:,} of types never seen):"
+        )
+        rows = [
+            {
+                "Strategy": LABELS[name],
+                "Tuned: seen": nov["tuned_thresholds"][name]["seen_types"],
+                "Tuned: unseen": nov["tuned_thresholds"][name]["unseen_types"],
+                "Default: seen": nov["default_thresholds"][name]["seen_types"],
+                "Default: unseen": nov["default_thresholds"][name]["unseen_types"],
+            }
+            for name in STRATEGIES
+        ]
+        print(pd.DataFrame(rows).to_string(index=False))
 
     # Feature analysis: what the model relies on and what makes flagged traffic unusual.
     importances = global_importances(rf, meta["feature_names"])

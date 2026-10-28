@@ -1,11 +1,12 @@
 import json
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from src.config import resolve_path
-from src.data_preprocessing import prepare_data
-from src.evaluate import evaluate
+from src.data_preprocessing import RawData, load_and_encode, prepare_data
+from src.evaluate import evaluate, novelty_masks, recall_by_novelty
 from src.explain import explain
 from src.train_models import (
     ISO_FILE,
@@ -99,6 +100,31 @@ def test_evaluate_reports_metrics_and_writes_outputs(cfg):
     ):
         assert (outputs_dir / name).exists()
     assert json.loads((outputs_dir / "metrics.json").read_text())["n_test"] == metrics["n_test"]
+
+
+def test_novelty_masks_split_attacks_by_whether_the_type_was_seen_in_training():
+    train_names = pd.Series(["normal", "neptune", "smurf", "normal"])
+    test_names = pd.Series(["normal", "neptune", "mailbomb", "smurf", "apache2"])
+    raw = RawData(None, None, None, None, "x", {}, train_names, test_names)
+
+    seen, unseen = novelty_masks(raw)
+
+    assert seen.tolist() == [False, True, False, True, False]
+    assert unseen.tolist() == [False, False, True, False, True]
+
+
+def test_novelty_masks_are_unavailable_for_synthetic_data(cfg):
+    assert novelty_masks(load_and_encode(cfg)) is None
+
+
+def test_recall_by_novelty_reports_each_group_separately():
+    flagged = np.array([True, False, True, True])
+    seen = np.array([True, True, False, False])
+    unseen = np.array([False, False, True, True])
+
+    result = recall_by_novelty({"random_forest": flagged}, seen, unseen)
+
+    assert result == {"random_forest": {"seen_types": 0.5, "unseen_types": 1.0}}
 
 
 def test_explain_writes_alert_explanations(cfg):

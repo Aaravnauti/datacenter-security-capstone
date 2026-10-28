@@ -59,6 +59,12 @@ contamination cutoff, Random Forest at 0.50):
   nothing beyond it. The Isolation Forest's value is that it needs no labeled attacks at all,
   so it is the fallback when labeled attack data is unavailable. At its default threshold it
   catches 95% of attacks with zero attack labels.
+- **On attack types never seen in training, the models behave very differently.** 17 of the
+  37 attack types in `KDDTest+` (3,750 attacks, 29% of the test attacks) do not appear in
+  training. At default thresholds the Isolation Forest catches 99% of them and the Random
+  Forest only 25%. The tuned Random Forest catches 94% (and 99.5% of known types), but the
+  tuned Isolation Forest falls to 60%, because its strict threshold was chosen on validation
+  data that contains no novel attacks. `python -m src.evaluate` prints the full table.
 - **A threshold of 0.015 is aggressive.** It flags anything that even 1.5% of trees consider
   malicious. It transfers to `KDDTest+` because the novel attacks there resemble training
   families. It may not transfer to a genuinely new attack family, so re-tune on facility data.
@@ -202,7 +208,7 @@ telemetry generator (this is what the tests and CI use).
 │   ├── config.py                   Config and path helpers
 │   └── generate_synthetic_data.py  Offline fallback telemetry generator
 ├── tests/                          pytest suite (no network required)
-├── docs/                           Kill chain, CVSS, remediation, case study, enterprise architecture
+├── docs/                           Project report (docx, pdf), kill chain, CVSS, remediation, case study, enterprise architecture
 ├── outputs/                        Metrics and plots from the last run
 ├── Dockerfile
 └── .github/workflows/ci.yml        Lint, tests, smoke run, Docker build

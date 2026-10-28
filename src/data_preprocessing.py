@@ -51,6 +51,9 @@ class RawData:
     y_test: pd.Series
     source: str
     categories: dict[str, list[str]] = field(default_factory=dict)
+    # Attack names (NSL-KDD only), used to separate attack types seen in training from new ones.
+    train_attack_names: pd.Series | None = None
+    test_attack_names: pd.Series | None = None
 
 
 @dataclass
@@ -138,6 +141,7 @@ def load_nsl_kdd(cfg: dict) -> RawData:
     return RawData(
         X_train, y_train, X_test, y_test,
         "NSL-KDD (train=KDDTrain+, test=KDDTest+)", categories,
+        train_attack_names=train["label"], test_attack_names=test["label"],
     )
 
 
